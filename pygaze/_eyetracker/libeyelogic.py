@@ -6,7 +6,7 @@
 # or other software (as well as non-gaze contingent experiments/software)
 # Copyright (C) 2012-2013 Edwin S. Dalmaijer
 #
-# This program is free software = you can redistribute it and/or modify
+# This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
@@ -128,90 +128,61 @@ def pix2deg(cmdist, pixelsize, pixpercm):
 
 g_api = None
 
-class GazeSample(Structure):
-    _fields_ = [ \
-      ("timestampMicroSec",c_int64), \
-      ("index",c_int32), \
-      ("porRawX",c_double), \
-      ("porRawY",c_double), \
-      ("porFilteredX",c_double), \
-      ("porFilteredY",c_double), \
-      ("porLeftX",c_double), \
-      ("porLeftY",c_double), \
-      ("eyePositionLeftX",c_double), \
-      ("eyePositionLeftY",c_double), \
-      ("eyePositionLeftZ",c_double), \
-      ("pupilDiameterLeft",c_double), \
-      ("porRightX",c_double), \
-      ("porRightY",c_double), \
-      ("eyePositionRightX",c_double), \
-      ("eyePositionRightY",c_double), \
-      ("eyePositionRightZ",c_double), \
-      ("pupilDiameterRight",c_double) \
-    ]
-
-@SampleCallback
-def sampleCallback(sample = POINTER(ELCGazeSample)):
+@GazeSampleCallback
+def gazeSampleCallback(sample = POINTER(ELGazeSample)):
     if g_api is None:
         return
     g_api.sampleLock.acquire()
-    gs = GazeSample(
-            timestampMicroSec = sample.contents.timestampMicroSec,
-            index = sample.contents.index,
-            porRawX = sample.contents.porRaw.x,
-            porRawY = sample.contents.porRaw.y,
-            porFilteredX = sample.contents.porFiltered.x,
-            porFilteredY = sample.contents.porFiltered.y,
-            porLeftX = sample.contents.porLeft.x,
-            porLeftY = sample.contents.porLeft.y,
-            eyePositionLeftX = sample.contents.eyePositionLeft.x,
-            eyePositionLeftY = sample.contents.eyePositionLeft.y,
-            eyePositionLeftZ = sample.contents.eyePositionLeft.z,
-            pupilDiameterLeft = 2.*sample.contents.pupilRadiusLeft,
-            porRightX = sample.contents.porRight.x,
-            porRightY = sample.contents.porRight.y,
-            eyePositionRightX = sample.contents.eyePositionRight.x,
-            eyePositionRightY = sample.contents.eyePositionRight.y,
-            eyePositionRightZ = sample.contents.eyePositionRight.z,
-            pupilDiameterRight = 2.*sample.contents.pupilRadiusRight
-        )
-    g_api.lastSample = copy.copy(gs)
+    scaleX = g_api.dispsize[0] / g_api.rawResolution[0]
+    scaleY = g_api.dispsize[1] / g_api.rawResolution[1]
+
+    g_api.lastSample = ELGazeSample()
+    g_api.lastSample.timestampMicroSec = sample.contents.timestampMicroSec
+    g_api.lastSample.index = sample.contents.index
+    g_api.lastSample.porRawX = sample.contents.porRawX * scaleX
+    g_api.lastSample.porRawY = sample.contents.porRawY * scaleY
+    g_api.lastSample.porFilteredX = sample.contents.porFilteredX * scaleX
+    g_api.lastSample.porFilteredY = sample.contents.porFilteredY * scaleY
+    g_api.lastSample.porLeftX = sample.contents.porLeftX * scaleX
+    g_api.lastSample.porLeftY = sample.contents.porLeftY * scaleY
+    g_api.lastSample.eyePositionLeftX = sample.contents.eyePositionLeftX
+    g_api.lastSample.eyePositionLeftY = sample.contents.eyePositionLeftY
+    g_api.lastSample.eyePositionLeftZ = sample.contents.eyePositionLeftZ
+    g_api.lastSample.pupilRadiusLeft = sample.contents.pupilRadiusLeft
+    g_api.lastSample.porRightX = sample.contents.porRightX * scaleX
+    g_api.lastSample.porRightY = sample.contents.porRightY*scaleY
+    g_api.lastSample.eyePositionRightX = sample.contents.eyePositionRightX
+    g_api.lastSample.eyePositionRightY = sample.contents.eyePositionRightY
+    g_api.lastSample.eyePositionRightZ = sample.contents.eyePositionRightZ
+    g_api.lastSample.pupilRadiusRight = sample.contents.pupilRadiusRight
+    gs = copy.copy(g_api.lastSample)
     g_api.sampleLock.release()
     if g_api._recording.is_set():
         g_api._logging_queue.put(gs)
 
-@ConnectionClosedCallback
-def connectionClosedCallback():
+@EventCallback
+def eventCallback(eventId):
     if (g_api is None):
         return
-    g_api._connected.clear()
-    g_api._recording.clear()
-    g_api._calibrated.clear()
 
-@DeviceConnectedCallback
-def deviceConnectedCallback(deviceSerial = c_int64, frameRates = POINTER(c_uint8), \
- numFrameRates = c_int32, calibrationMethods = POINTER(c_uint8), \
-  numCalibrationMethods = c_int32):
-    if (g_api is None):
-        return
-    g_api.sampleRate = frameRates[0]
-    g_api.sampleTime = 1000.0 / g_api.sampleRate
-    g_api.log("samplerate = {} Hz".format(g_api.sampleRate))
-    g_api.log("sampletime = {} ms".format(g_api.sampleTime))
-
-@DeviceDisconnectedCallback
-def deviceDisconnectedCallback():
-    if (g_api is None):
-        return
-    g_api._recording.clear()
-    g_api._calibrated.clear()
-
-@TrackingStoppedCallback
-def trackingStoppedCallback():
-    if (g_api is None):
-        return
-    g_api._recording.clear()
-    g_api._calibrated.clear()
+    e = ELEvent(eventId)
+    if (e == ELEvent.SCREEN_CHANGED):
+        screenConfig = self.api.getScreenConfig()
+        self.rawResolution = (screenConfig.resolutionX, screenConfig.resolutionY)
+        pass
+    elif (e == ELEvent.CONNECTION_CLOSED):
+        self.api.registerGazeSampleCallback( None )
+        g_api._connected.clear()
+        g_api._recording.clear()
+        g_api._calibrated.clear()
+    elif (e == ELEvent.DEVICE_CONNECTED):
+        pass
+    elif (e == ELEvent.DEVICE_DISCONNECTED):
+        g_api._recording.clear()
+        g_api._calibrated.clear()
+    elif (e == ELEvent.TRACKING_STOPPED):
+        g_api._recording.clear()
+        g_api._calibrated.clear()
 
 ## A class for EyeLogic eye tracker objects.
 class EyeLogicTracker(BaseEyeTracker):
@@ -279,10 +250,10 @@ class EyeLogicTracker(BaseEyeTracker):
             "porFilteredY", \
             "porLeftX", \
             "porLeftY", \
-            "pupilDiameterLeft", \
+            "pupilRadiusLeft", \
             "porRightX", \
             "porRightY", \
-            "pupilDiameterRight", \
+            "pupilRadiusRight", \
             ]
         # Open a new log file.
         dir_name = os.path.dirname(logfile)
@@ -323,23 +294,33 @@ class EyeLogicTracker(BaseEyeTracker):
         self.log("speed threshold = {} degrees/second".format(self.spdtresh))
         self.log("acceleration threshold = {} degrees/second**2".format( \
             self.accthresh))
-        self.log("end pygaze initiation")
 
         # connect
-        self.api = ELApi("PyGaze", \
-                sampleCallback, \
-                connectionClosedCallback, \
-                deviceConnectedCallback, \
-                deviceDisconnectedCallback, \
-                trackingStoppedCallback )
+        self.api = ELApi( "PyGaze" )
+        self.api.registerGazeSampleCallback( gazeSampleCallback )
+        self.api.registerEventCallback( eventCallback )
+
         resultConnect = self.api.connect()
         if (resultConnect != ELApi.ReturnConnect.SUCCESS):
             self._connected.clear()
             raise Exception("Cannot connect to EyeLogic server = {}".format(errorstringConnect(resultConnect)))
         self._connected.set()
-        
-        self.sampleRate = 60.
-        self.sampleTime = 1000. / self.sampleRate
+
+        screenConfig = self.api.getScreenConfig()
+        self.rawResolution = (screenConfig.resolutionX, screenConfig.resolutionY)
+        self.log("raw screen resolution = {}x{}".format(
+            self.rawResolution[0], self.rawResolution[1]))
+        self.log("end pygaze initiation")
+
+        deviceConfig = self.api.getDeviceConfig()
+        if (deviceConfig.deviceSerial == 0):
+            raise Exception("no eye tracking device connected")
+        if (len(deviceConfig.frameRates) == 0):
+            raise Exception("failed to read out device configuration")
+        g_api.sampleRate = deviceConfig.frameRates[0]
+        g_api.sampleTime = 1000.0 / g_api.sampleRate
+        g_api.log("samplerate = {} Hz".format(g_api.sampleRate))
+        g_api.log("sampletime = {} ms".format(g_api.sampleTime))
         self._logging_thread.start()
 
         self.screen.clear()
@@ -366,7 +347,7 @@ class EyeLogicTracker(BaseEyeTracker):
                 # Log the message string and/or the sample.
                 if type(sample) in [tuple, list]:
                     self._write_tuple(sample)
-                elif type(sample) == GazeSample:
+                elif type(sample) == ELGazeSample:
                     self._write_sample(sample)
                 else:
                     print("WARNING = Unrecognised object in log queue = '{}'".format( \
@@ -477,15 +458,14 @@ class EyeLogicTracker(BaseEyeTracker):
             Ymean += sl[i][1]
         XRMS = (sum(Xvar) / len(Xvar))**0.5
         YRMS = (sum(Yvar) / len(Yvar))**0.5
-        Xmean = Xmean / (len(sl)-1)
-        Ymean = Ymean / (len(sl)-1)
+        Xmean = Xmean / (len(sl)-2)
+        Ymean = Ymean / (len(sl)-2)
         self.pxdsttresh = (XRMS, YRMS)
 
         # calculate pixels per cm
         pixpercm = (self.dispsize[0]/float(self.screensize[0]) + self.dispsize[1]/float(self.screensize[1])) / 2
 
         # get accuracy
-        print ("{}, {}".format(Xmean, x))
         accuracyPxX = abs( Xmean - x )
         accuracyPxY = abs( Ymean - y )
         self.accuracy = ( pix2deg(screendist, accuracyPxX, pixpercm), \
@@ -583,11 +563,11 @@ class EyeLogicTracker(BaseEyeTracker):
         pupilSize = -1
         if (self.lastSample is not None):
             if self.eye_used == 0:
-                pupilSize = self.lastSample.pupilDiameterLeft;
+                pupilSize = 2.*self.lastSample.pupilRadiusLeft;
             elif self.eye_used == 1:
-                pupilSize = self.lastSample.pupilDiameterRight;
+                pupilSize = 2.*self.lastSample.pupilRadiusRight;
             elif self.eye_used == 2:
-                pupilSize = .5 * (self.lastSample.pupilDiameterLeft + self.lastSample.pupilDiamaeterRight);
+                pupilSize = self.lastSample.pupilRadiusLeft + self.lastSample.pupilRadiusRight;
         self.sampleLock.release()
         return pupilSize
 
@@ -597,11 +577,11 @@ class EyeLogicTracker(BaseEyeTracker):
         por = (-1, -1)
         if (self.lastSample is not None):
             if self.eye_used == 0:
-                por = (self.lastSample.porLeftX, self.lastSample.porLeftY);
+                por = (self.lastSample.porLeftX, self.lastSample.porLeftY)
             elif self.eye_used == 1:
-                por = (self.lastSample.porRightX, self.lastSample.porRightY);
+                por = (self.lastSample.porRightX, self.lastSample.porRightY)
             elif self.eye_used == 2:
-                por = (self.lastSample.porFilteredX, self.lastSample.porFilteredY);
+                por = (self.lastSample.porFilteredX, self.lastSample.porFilteredY)
         self.sampleLock.release()
         return por
 
@@ -642,6 +622,8 @@ class EyeLogicTracker(BaseEyeTracker):
 
 ## Waits for an event.
     def wait_for_event(self, event):
+        print("waitforevent", flush=True)
+
         if event == 3: # STARTBLINK
             return self.wait_for_blink_start()
         elif event == 4: # ENDBLINK
@@ -694,27 +676,30 @@ class EyeLogicTracker(BaseEyeTracker):
 
 ## Returns time and gaze position when a fixation has ended.
     def wait_for_fixation_end(self):
-            # function assumes that a 'fixation' has ended when a deviation of more than fixtresh
-            # from the initial 'fixation' position has been detected
+        print("wait_for_fixation_end", flush=True)
+        # function assumes that a 'fixation' has ended when a deviation of more than fixtresh
+        # from the initial 'fixation' position has been detected
 
-            # get starting time and position
-            stime, spos = self.wait_for_fixation_start()
+        # get starting time and position
+        stime, spos = self.wait_for_fixation_start()
 
-            # loop until fixation has ended
-            while True:
-                # get new sample
-                npos = self.sample() # get newest sample
-                # check if sample is valid
-                if self.is_valid_sample(npos):
-                    # check if sample deviates to much from starting position
-                    if (npos[0]-spos[0])**2 + (npos[1]-spos[1])**2 > self.pxfixtresh**2: # Pythagoras
-                        # break loop if deviation is too high
-                        break
+        # loop until fixation has ended
+        while True:
+            # get new sample
+            npos = self.sample() # get newest sample
+            # check if sample is valid
+            if self.is_valid_sample(npos):
+                # check if sample deviates to much from starting position
+                if (npos[0]-spos[0])**2 + (npos[1]-spos[1])**2 > self.pxfixtresh**2: # Pythagoras
+                    # break loop if deviation is too high
+                    break
 
-            return clock.get_time(), spos
+        return clock.get_time(), spos
 
 ## Returns starting time and position when a fixation is started.
     def wait_for_fixation_start(self):
+        print("wait_for_fixation_start", flush=True)
+
         # function assumes a 'fixation' has started when gaze position
         # remains reasonably stable for self.fixtimetresh
 
