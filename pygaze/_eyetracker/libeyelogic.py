@@ -42,21 +42,6 @@ except:
         print("Failed to import eyelogic.ELApi")
         raise Exception("Could not import EyeLogicTracker")
 
-
-## we try importing the copy_docstr function, but as we do not really need it
-## for a proper functioning of the code, we simply ignore it when it fails to
-## be imported correctly
-#try:
-#    from pygaze._misc.misc import copy_docstr
-#except:
-#    pass
-#
-#import copy
-#import math
-#
-#
-#
-
 ## converts an error code of connect( ) to a string
 def errorstringConnect(returncode):
     if type(returncode) != ELApi.ReturnConnect:
@@ -139,18 +124,34 @@ def gazeSampleCallback(sample = POINTER(ELGazeSample)):
     g_api.lastSample = ELGazeSample()
     g_api.lastSample.timestampMicroSec = sample.contents.timestampMicroSec
     g_api.lastSample.index = sample.contents.index
-    g_api.lastSample.porRawX = sample.contents.porRawX * scaleX
-    g_api.lastSample.porRawY = sample.contents.porRawY * scaleY
-    g_api.lastSample.porFilteredX = sample.contents.porFilteredX * scaleX
-    g_api.lastSample.porFilteredY = sample.contents.porFilteredY * scaleY
-    g_api.lastSample.porLeftX = sample.contents.porLeftX * scaleX
-    g_api.lastSample.porLeftY = sample.contents.porLeftY * scaleY
+    if (sample.contents.porRawX == ELInvalidValue):
+        g_api.lastSample.porRawX = ELInvalidValue
+        g_api.lastSample.porRawY = ELInvalidValue
+    else:
+        g_api.lastSample.porRawX = sample.contents.porRawX * scaleX
+        g_api.lastSample.porRawY = sample.contents.porRawY * scaleY
+    if (sample.contents.porFilteredX == ELInvalidValue):
+        g_api.lastSample.porFilteredX = ELInvalidValue
+        g_api.lastSample.porFilteredY = ELInvalidValue
+    else:
+        g_api.lastSample.porFilteredX = sample.contents.porFilteredX * scaleX
+        g_api.lastSample.porFilteredY = sample.contents.porFilteredY * scaleY
+    if (sample.contents.porLeftX == ELInvalidValue):
+        g_api.lastSample.porLeftX = ELInvalidValue
+        g_api.lastSample.porLeftY = ELInvalidValue
+    else:
+        g_api.lastSample.porLeftX = sample.contents.porLeftX * scaleX
+        g_api.lastSample.porLeftY = sample.contents.porLeftY * scaleY
     g_api.lastSample.eyePositionLeftX = sample.contents.eyePositionLeftX
     g_api.lastSample.eyePositionLeftY = sample.contents.eyePositionLeftY
     g_api.lastSample.eyePositionLeftZ = sample.contents.eyePositionLeftZ
     g_api.lastSample.pupilRadiusLeft = sample.contents.pupilRadiusLeft
-    g_api.lastSample.porRightX = sample.contents.porRightX * scaleX
-    g_api.lastSample.porRightY = sample.contents.porRightY*scaleY
+    if (sample.contents.porRightX == ELInvalidValue):
+        g_api.lastSample.porRightX = ELInvalidValue
+        g_api.lastSample.porRightY = ELInvalidValue
+    else:
+        g_api.lastSample.porRightX = sample.contents.porRightX * scaleX
+        g_api.lastSample.porRightY = sample.contents.porRightY * scaleY
     g_api.lastSample.eyePositionRightX = sample.contents.eyePositionRightX
     g_api.lastSample.eyePositionRightY = sample.contents.eyePositionRightY
     g_api.lastSample.eyePositionRightZ = sample.contents.eyePositionRightZ
@@ -211,6 +212,7 @@ class EyeLogicTracker(BaseEyeTracker):
         self.dispsize = self.disp.dispsize # display size in pixels
         self.screensize = settings.SCREENSIZE # display size in cm
         self.kb = Keyboard(keylist=['space', 'escape', 'q'], timeout=1)
+        self.errorbeep = Sound(osc='saw', freq=100, length=100)
 
         # show a message
         self.screen.clear()
@@ -307,6 +309,7 @@ class EyeLogicTracker(BaseEyeTracker):
         self._connected.set()
 
         screenConfig = self.api.getScreenConfig()
+        self.log("eye tracker is mounted on screen {}".format(screenConfig.id))
         self.rawResolution = (screenConfig.resolutionX, screenConfig.resolutionY)
         self.log("raw screen resolution = {}x{}".format(
             self.rawResolution[0], self.rawResolution[1]))
@@ -394,12 +397,15 @@ class EyeLogicTracker(BaseEyeTracker):
         self.disp.fill(self.screen)
         self.disp.show()
 
-        resultTracking = self.api.requestTracking(0)
-        if (resultTracking != ELApi.ReturnStart.SUCCESS):
-            raise Exception("unable to start eye tracker")
+        if (not self._recording.is_set()):
+            resultTracking = self.api.requestTracking(0)
+            if (resultTracking != ELApi.ReturnStart.SUCCESS):
+                raise Exception("unable to start eye tracker")
 
         resultCalibrate = self.api.calibrate(0)
         if (resultCalibrate != ELApi.ReturnCalibrate.SUCCESS):
+            self.api.unrequestTracking()
+            self.errorbeep.play()
             raise Exception("Calibration failed = {}".format(errorstringCalibrate(resultCalibrate)))
         self._calibrated.set()
 
@@ -433,6 +439,8 @@ class EyeLogicTracker(BaseEyeTracker):
             self.sampleLock.release()
             clock.pause(int(self.sampleTime))
         if i >= self.maxtries:
+            self.api.unrequestTracking()
+            self.errorbeep.play()
             raise Exception("unable to receive gaze data for noise calibration")
 
         # get samples
@@ -444,6 +452,8 @@ class EyeLogicTracker(BaseEyeTracker):
                 sl.append(s)
             clock.pause(int(self.sampleTime))
         if (len(sl) < 2):
+            if (not self._recording.is_set()):
+                self.api.unrequestTracking()
             return False
 
         # calculate RMS noise
@@ -489,15 +499,13 @@ class EyeLogicTracker(BaseEyeTracker):
         self.log("fixation threshold = {} pixels".format(self.pxfixtresh))
         self.log("speed threshold = {} pixels/ms".format(self.pxspdtresh))
         self.log("acceleration threshold = {} pixels/ms**2".format(self.pxacctresh))
+        
+        if (not self._recording.is_set()):
+            self.api.unrequestTracking()
         return True
 
 ## Neatly closes connection to tracker.
     def close(self):
-#        # save data
-#        res = iViewXAPI.iV_SaveData(str(self.outputfile), str(self.description), str(self.participant), 1)
-#        if res != 1:
-#            err = errorstring(res)
-#            raise Exception("Error in libsmi.SMItracker.close = failed to save data; {}".format(err))
         if self._recording.is_set():
             self.stop_recording()
             
@@ -610,6 +618,9 @@ class EyeLogicTracker(BaseEyeTracker):
 
 ## Starts recording.
     def start_recording(self):
+        resultTracking = self.api.requestTracking(0)
+        if (resultTracking != ELApi.ReturnStart.SUCCESS):
+            raise Exception("unable to start eye tracker")
         self._recording.set()
 
 ## Sends a status message to the eye tracker, which is displayed in the tracker's GUI
@@ -618,6 +629,7 @@ class EyeLogicTracker(BaseEyeTracker):
 
 ## Stops recording.
     def stop_recording(self):
+        self.api.unrequestTracking()
         self._recording.clear()
 
 ## Waits for an event.
