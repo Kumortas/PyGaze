@@ -390,12 +390,12 @@ class EyeLogicTracker(BaseEyeTracker):
 
 ## Calibrates the eye tracking system.
     def calibrate(self):
-        self.screen.clear()
-        self.screen.draw_text(
-            text="Calibrate EyeTracker",
-            fontsize=20)
-        self.disp.fill(self.screen)
-        self.disp.show()
+        #self.screen.clear()
+        #self.screen.draw_text(
+        #    text="Calibrate EyeTracker",
+        #    fontsize=20)
+        #self.disp.fill(self.screen)
+        #self.disp.show()
 
         if (not self._recording.is_set()):
             resultTracking = self.api.requestTracking(0)
